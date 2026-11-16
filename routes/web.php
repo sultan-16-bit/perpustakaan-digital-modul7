@@ -68,87 +68,105 @@ Route::middleware(['auth'])->group(function () {
     })->middleware(['can:kelola-buku'])->name('buku.destroy');
 
 
-    // ================= PEMINJAMAN (SOAL A4 & 4) =================
+    // ================= PEMINJAMAN (SOAL A4 & 4 - DATABASE SUPABASE) =================
 
     // SOAL 4: Filter riwayat (Admin lihat semua, Siswa & Petugas lihat miliknya sendiri)
     Route::get('/peminjaman/riwayat', function () {
-        $all = Cache::get('peminjamans', []);
         $user = Auth::user();
+        $query = DB::table('peminjamans')
+            ->leftJoin('users', 'peminjamans.user_id', '=', 'users.id')
+            ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
+            ->select(
+                'peminjamans.*',
+                'users.name as user_name',
+                'bukus.judul as judul'
+            )
+            ->orderByDesc('peminjamans.id');
 
         if ($user && method_exists($user, 'hasRole') && $user->hasRole('admin')) {
-            $peminjamans = $all;
+            $raw = $query->get();
         } else {
-            $peminjamans = array_filter($all, function ($item) {
-                return isset($item['user_id']) && $item['user_id'] == Auth::id();
-            });
+            $raw = $query->where('peminjamans.user_id', Auth::id())->get();
         }
+
+        $peminjamans = $raw->map(function ($item) {
+            return [
+                'id' => $item->id,
+                'user_id' => $item->user_id,
+                'user_name' => $item->user_name ?? 'Pengguna',
+                'judul' => $item->judul ?? ($item->judul_buku ?? 'Buku'),
+                'tanggal_pinjam' => $item->tanggal_pinjam ?? ($item->created_at ? \Carbon\Carbon::parse($item->created_at)->format('d M Y') : '-'),
+                'tanggal_kembali' => $item->tanggal_kembali ?? '-',
+                'status' => $item->status ?? 'Menunggu Persetujuan',
+            ];
+        })->toArray();
 
         return view('peminjaman.riwayat', compact('peminjamans'));
     })->name('peminjaman.riwayat');
 
     // SOAL A4 & 4 (IDOR): Dicek pakai PeminjamanPolicy agar siswa lain ditolak (403)
     Route::get('/peminjaman/{id}', function ($id) {
-        $peminjamans = Cache::get('peminjamans', []);
-        $peminjaman = collect($peminjamans)->firstWhere('id', $id);
+        $item = DB::table('peminjamans')
+            ->leftJoin('users', 'peminjamans.user_id', '=', 'users.id')
+            ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
+            ->select('peminjamans.*', 'users.name as user_name', 'bukus.judul as judul')
+            ->where('peminjamans.id', $id)
+            ->first();
 
-        if (!$peminjaman) {
+        if (!$item) {
             abort(404, 'Data peminjaman tidak ditemukan.');
         }
 
+        $peminjaman = (array) $item;
         Gate::authorize('view', [$peminjaman]);
 
         return view('peminjaman.show', compact('peminjaman'));
     })->name('peminjaman.detail');
 
     Route::post('/peminjaman/store', function (Request $request) {
-        $peminjamans = Cache::get('peminjamans', []);
-
-        $newItem = [
-            'id' => time() . rand(10, 99),
+        $data = [
             'user_id' => Auth::id(),
-            'user_name' => Auth::user()->name,
-            'judul' => $request->judul ?? 'Buku Tanpa Judul',
-            'tanggal_pinjam' => now()->format('d M Y'),
-            'tanggal_kembali' => now()->addDays(7)->format('d M Y'),
+            'buku_id' => $request->buku_id,
+            'tanggal_pinjam' => now()->format('Y-m-d'),
+            'tanggal_kembali' => now()->addDays(7)->format('Y-m-d'),
             'status' => 'Menunggu Persetujuan',
+            'created_at' => now(),
+            'updated_at' => now(),
         ];
 
-        $peminjamans[] = $newItem;
-        Cache::put('peminjamans', $peminjamans, now()->addDays(7));
+        if (Schema::hasColumn('peminjamans', 'judul')) {
+            $data['judul'] = $request->judul ?? 'Buku Tanpa Judul';
+        }
+
+        DB::table('peminjamans')->insert($data);
 
         return response()->json(['message' => 'Peminjaman berhasil diajukan!']);
     })->name('peminjaman.store');
 
     Route::post('/peminjaman/setujui/{id}', function ($id) {
-        $peminjamans = Cache::get('peminjamans', []);
-        foreach ($peminjamans as &$item) {
-            if ($item['id'] == $id) {
-                $item['status'] = 'Sedang Dipinjam';
-            }
-        }
-        Cache::put('peminjamans', $peminjamans, now()->addDays(7));
+        DB::table('peminjamans')->where('id', $id)->update([
+            'status' => 'Sedang Dipinjam',
+            'updated_at' => now(),
+        ]);
         return back()->with('status', 'Peminjaman buku berhasil disetujui!');
     })->name('peminjaman.setujui');
 
     Route::post('/peminjaman/kembali/{id}', function ($id) {
-        $peminjamans = Cache::get('peminjamans', []);
-        foreach ($peminjamans as &$item) {
-            if ($item['id'] == $id) {
-                $item['status'] = 'Sudah Dikembalikan';
-            }
-        }
-        Cache::put('peminjamans', $peminjamans, now()->addDays(7));
+        DB::table('peminjamans')->where('id', $id)->update([
+            'status' => 'Sudah Dikembalikan',
+            'updated_at' => now(),
+        ]);
         return back()->with('status', 'Pengembalian buku berhasil dicatat!');
     })->name('peminjaman.kembali');
 
     Route::post('/peminjaman/kembalikan-sendiri/{id}', function ($id) {
-        $peminjamans = Cache::get('peminjamans', []);
-        foreach ($peminjamans as &$item) {
-            if ($item['id'] == $id && $item['user_id'] == Auth::id()) {
-                $item['status'] = 'Sudah Dikembalikan';
-            }
-        }
-        Cache::put('peminjamans', $peminjamans, now()->addDays(7));
+        DB::table('peminjamans')
+            ->where('id', $id)
+            ->where('user_id', Auth::id())
+            ->update([
+                'status' => 'Sudah Dikembalikan',
+                'updated_at' => now(),
+            ]);
         return back()->with('status', 'Buku berhasil dikembalikan!');
     })->name('peminjaman.kembalikan.sendiri');
 
@@ -291,7 +309,29 @@ Route::middleware(['auth'])->group(function () {
             abort(403, 'Unauthorized action. Siswa dilarang mengakses laporan.');
         }
 
-        $peminjamans = Cache::get('peminjamans', []);
+        $raw = DB::table('peminjamans')
+            ->leftJoin('users', 'peminjamans.user_id', '=', 'users.id')
+            ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
+            ->select(
+                'peminjamans.*',
+                'users.name as user_name',
+                'bukus.judul as judul'
+            )
+            ->orderByDesc('peminjamans.id')
+            ->get();
+
+        $peminjamans = $raw->map(function ($item) {
+            return [
+                'id' => $item->id,
+                'user_id' => $item->user_id,
+                'user_name' => $item->user_name ?? 'Pengguna',
+                'judul' => $item->judul ?? ($item->judul_buku ?? 'Buku'),
+                'tanggal_pinjam' => $item->tanggal_pinjam ?? ($item->created_at ? \Carbon\Carbon::parse($item->created_at)->format('d M Y') : '-'),
+                'tanggal_kembali' => $item->tanggal_kembali ?? '-',
+                'status' => $item->status ?? 'Menunggu Persetujuan',
+            ];
+        })->toArray();
+
         return view('laporan.index', compact('peminjamans'));
     })->name('laporan.index');
 
