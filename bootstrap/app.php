@@ -3,6 +3,7 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 use Spatie\Permission\Middleware\RoleMiddleware;
 use Spatie\Permission\Middleware\PermissionMiddleware;
 use Spatie\Permission\Middleware\RoleOrPermissionMiddleware;
@@ -15,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        // Percayai reverse proxy Vercel agar HTTPS & cookie session terbaca normal
+        $middleware->trustProxies(at: '*');
+
         // MENDAFTARKAN ALIAS MIDDLEWARE SPATIE
         $middleware->alias([
             'role' => RoleMiddleware::class,
@@ -23,5 +27,8 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        // Paksa respon JSON jika request berasal dari fetch/AJAX atau endpoint API
+        $exceptions->shouldRenderJsonWhen(function (Request $request, \Throwable $e) {
+            return $request->expectsJson() || $request->ajax();
+        });
     })->create();
