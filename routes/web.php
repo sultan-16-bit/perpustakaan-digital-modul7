@@ -1,7 +1,6 @@
 <?php
 
 use App\Http\Controllers\ProfileController;
-use App\Models\Peminjaman;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -68,36 +67,46 @@ Route::middleware(['auth'])->group(function () {
     })->middleware(['can:kelola-buku'])->name('buku.destroy');
 
 
-    // ================= PEMINJAMAN (SOAL A4 & 4 - DATABASE SUPABASE) =================
+    // ================= PEMINJAMAN (SOAL A4 & 4 - SESUAI SCHEMA SUPABASE) =================
 
     // SOAL 4: Filter riwayat (Admin lihat semua, Siswa & Petugas lihat miliknya sendiri)
     Route::get('/peminjaman/riwayat', function () {
         $user = Auth::user();
+        $hasAnggotaCol = Schema::hasColumn('peminjamans', 'anggota_id');
+        $userCol = $hasAnggotaCol ? 'anggota_id' : 'user_id';
+
         $query = DB::table('peminjamans')
-            ->leftJoin('users', 'peminjamans.user_id', '=', 'users.id')
             ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
-            ->select(
-                'peminjamans.*',
-                'users.name as user_name',
-                'bukus.judul as judul'
-            )
+            ->select('peminjamans.*', 'bukus.judul as judul_buku')
             ->orderByDesc('peminjamans.id');
+
+        if ($hasAnggotaCol && Schema::hasTable('anggotas')) {
+            $query->leftJoin('anggotas', 'peminjamans.anggota_id', '=', 'anggotas.id')
+                  ->addSelect('anggotas.nama as nama_anggota');
+        } else {
+            $query->leftJoin('users', "peminjamans.{$userCol}", '=', 'users.id')
+                  ->addSelect('users.name as nama_user');
+        }
 
         if ($user && method_exists($user, 'hasRole') && $user->hasRole('admin')) {
             $raw = $query->get();
         } else {
-            $raw = $query->where('peminjamans.user_id', Auth::id())->get();
+            $raw = $query->where("peminjamans.{$userCol}", Auth::id())->get();
         }
 
-        $peminjamans = $raw->map(function ($item) {
+        $peminjamans = $raw->map(function ($item) use ($userCol) {
+            $status = property_exists($item, 'status') && $item->status
+                ? $item->status
+                : ($item->tanggal_kembali ? 'Sudah Dikembalikan' : 'Sedang Dipinjam');
+
             return [
                 'id' => $item->id,
-                'user_id' => $item->user_id,
-                'user_name' => $item->user_name ?? 'Pengguna',
-                'judul' => $item->judul ?? ($item->judul_buku ?? 'Buku'),
-                'tanggal_pinjam' => $item->tanggal_pinjam ?? ($item->created_at ? \Carbon\Carbon::parse($item->created_at)->format('d M Y') : '-'),
-                'tanggal_kembali' => $item->tanggal_kembali ?? '-',
-                'status' => $item->status ?? 'Menunggu Persetujuan',
+                'user_id' => $item->{$userCol} ?? Auth::id(),
+                'user_name' => $item->nama_anggota ?? $item->nama_user ?? 'Anggota #' . ($item->{$userCol} ?? '-'),
+                'judul' => $item->judul_buku ?? 'Buku #' . $item->buku_id,
+                'tanggal_pinjam' => $item->tanggal_pinjam ?? '-',
+                'tanggal_kembali' => $item->tanggal_kembali ?? 'Belum Dikembalikan',
+                'status' => $status,
             ];
         })->toArray();
 
@@ -106,10 +115,12 @@ Route::middleware(['auth'])->group(function () {
 
     // SOAL A4 & 4 (IDOR): Dicek pakai PeminjamanPolicy agar siswa lain ditolak (403)
     Route::get('/peminjaman/{id}', function ($id) {
+        $hasAnggotaCol = Schema::hasColumn('peminjamans', 'anggota_id');
+        $userCol = $hasAnggotaCol ? 'anggota_id' : 'user_id';
+
         $item = DB::table('peminjamans')
-            ->leftJoin('users', 'peminjamans.user_id', '=', 'users.id')
             ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
-            ->select('peminjamans.*', 'users.name as user_name', 'bukus.judul as judul')
+            ->select('peminjamans.*', 'bukus.judul as judul')
             ->where('peminjamans.id', $id)
             ->first();
 
@@ -118,24 +129,38 @@ Route::middleware(['auth'])->group(function () {
         }
 
         $peminjaman = (array) $item;
+        $peminjaman['user_id'] = $item->{$userCol} ?? null;
+
         Gate::authorize('view', [$peminjaman]);
 
         return view('peminjaman.show', compact('peminjaman'));
     })->name('peminjaman.detail');
 
     Route::post('/peminjaman/store', function (Request $request) {
+        $hasAnggotaCol = Schema::hasColumn('peminjamans', 'anggota_id');
+        $userCol = $hasAnggotaCol ? 'anggota_id' : 'user_id';
+
+        // Pastikan ID anggota tersedia jika memakai foreign key anggota_id
+        $ownerId = Auth::id();
+        if ($hasAnggotaCol && Schema::hasTable('anggotas')) {
+            $anggota = DB::table('anggotas')->where('id', $ownerId)->first()
+                ?? DB::table('anggotas')->first();
+            if ($anggota) {
+                $ownerId = $anggota->id;
+            }
+        }
+
         $data = [
-            'user_id' => Auth::id(),
+            $userCol => $ownerId,
             'buku_id' => $request->buku_id,
             'tanggal_pinjam' => now()->format('Y-m-d'),
-            'tanggal_kembali' => now()->addDays(7)->format('Y-m-d'),
-            'status' => 'Menunggu Persetujuan',
+            'tanggal_kembali' => null,
             'created_at' => now(),
             'updated_at' => now(),
         ];
 
-        if (Schema::hasColumn('peminjamans', 'judul')) {
-            $data['judul'] = $request->judul ?? 'Buku Tanpa Judul';
+        if (Schema::hasColumn('peminjamans', 'status')) {
+            $data['status'] = 'Menunggu Persetujuan';
         }
 
         DB::table('peminjamans')->insert($data);
@@ -144,29 +169,35 @@ Route::middleware(['auth'])->group(function () {
     })->name('peminjaman.store');
 
     Route::post('/peminjaman/setujui/{id}', function ($id) {
-        DB::table('peminjamans')->where('id', $id)->update([
-            'status' => 'Sedang Dipinjam',
-            'updated_at' => now(),
-        ]);
+        $update = ['updated_at' => now()];
+        if (Schema::hasColumn('peminjamans', 'status')) {
+            $update['status'] = 'Sedang Dipinjam';
+        }
+        DB::table('peminjamans')->where('id', $id)->update($update);
         return back()->with('status', 'Peminjaman buku berhasil disetujui!');
     })->name('peminjaman.setujui');
 
     Route::post('/peminjaman/kembali/{id}', function ($id) {
-        DB::table('peminjamans')->where('id', $id)->update([
-            'status' => 'Sudah Dikembalikan',
+        $update = [
+            'tanggal_kembali' => now()->format('Y-m-d'),
             'updated_at' => now(),
-        ]);
+        ];
+        if (Schema::hasColumn('peminjamans', 'status')) {
+            $update['status'] = 'Sudah Dikembalikan';
+        }
+        DB::table('peminjamans')->where('id', $id)->update($update);
         return back()->with('status', 'Pengembalian buku berhasil dicatat!');
     })->name('peminjaman.kembali');
 
     Route::post('/peminjaman/kembalikan-sendiri/{id}', function ($id) {
-        DB::table('peminjamans')
-            ->where('id', $id)
-            ->where('user_id', Auth::id())
-            ->update([
-                'status' => 'Sudah Dikembalikan',
-                'updated_at' => now(),
-            ]);
+        $update = [
+            'tanggal_kembali' => now()->format('Y-m-d'),
+            'updated_at' => now(),
+        ];
+        if (Schema::hasColumn('peminjamans', 'status')) {
+            $update['status'] = 'Sudah Dikembalikan';
+        }
+        DB::table('peminjamans')->where('id', $id)->update($update);
         return back()->with('status', 'Buku berhasil dikembalikan!');
     })->name('peminjaman.kembalikan.sendiri');
 
@@ -309,26 +340,37 @@ Route::middleware(['auth'])->group(function () {
             abort(403, 'Unauthorized action. Siswa dilarang mengakses laporan.');
         }
 
-        $raw = DB::table('peminjamans')
-            ->leftJoin('users', 'peminjamans.user_id', '=', 'users.id')
-            ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
-            ->select(
-                'peminjamans.*',
-                'users.name as user_name',
-                'bukus.judul as judul'
-            )
-            ->orderByDesc('peminjamans.id')
-            ->get();
+        $hasAnggotaCol = Schema::hasColumn('peminjamans', 'anggota_id');
+        $userCol = $hasAnggotaCol ? 'anggota_id' : 'user_id';
 
-        $peminjamans = $raw->map(function ($item) {
+        $query = DB::table('peminjamans')
+            ->leftJoin('bukus', 'peminjamans.buku_id', '=', 'bukus.id')
+            ->select('peminjamans.*', 'bukus.judul as judul_buku')
+            ->orderByDesc('peminjamans.id');
+
+        if ($hasAnggotaCol && Schema::hasTable('anggotas')) {
+            $query->leftJoin('anggotas', 'peminjamans.anggota_id', '=', 'anggotas.id')
+                  ->addSelect('anggotas.nama as nama_anggota');
+        } else {
+            $query->leftJoin('users', "peminjamans.{$userCol}", '=', 'users.id')
+                  ->addSelect('users.name as nama_user');
+        }
+
+        $raw = $query->get();
+
+        $peminjamans = $raw->map(function ($item) use ($userCol) {
+            $status = property_exists($item, 'status') && $item->status
+                ? $item->status
+                : ($item->tanggal_kembali ? 'Sudah Dikembalikan' : 'Sedang Dipinjam');
+
             return [
                 'id' => $item->id,
-                'user_id' => $item->user_id,
-                'user_name' => $item->user_name ?? 'Pengguna',
-                'judul' => $item->judul ?? ($item->judul_buku ?? 'Buku'),
-                'tanggal_pinjam' => $item->tanggal_pinjam ?? ($item->created_at ? \Carbon\Carbon::parse($item->created_at)->format('d M Y') : '-'),
-                'tanggal_kembali' => $item->tanggal_kembali ?? '-',
-                'status' => $item->status ?? 'Menunggu Persetujuan',
+                'user_id' => $item->{$userCol} ?? Auth::id(),
+                'user_name' => $item->nama_anggota ?? $item->nama_user ?? 'Anggota #' . ($item->{$userCol} ?? '-'),
+                'judul' => $item->judul_buku ?? 'Buku #' . $item->buku_id,
+                'tanggal_pinjam' => $item->tanggal_pinjam ?? '-',
+                'tanggal_kembali' => $item->tanggal_kembali ?? 'Belum Dikembalikan',
+                'status' => $status,
             ];
         })->toArray();
 
