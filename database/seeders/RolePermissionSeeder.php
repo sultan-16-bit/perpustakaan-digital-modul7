@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
 use App\Models\User;
@@ -16,22 +17,22 @@ class RolePermissionSeeder extends Seeder
 
         // 1. Buat seluruh 16 Permission sesuai tabel
         $permissions = [
-            'Akses dashboard admin',            // 1
-            'Akses dashboard petugas',          // 2
-            'Lihat daftar buku',                // 3
-            'Kelola data buku',                 // 4
-            'Kelola data pengguna',             // 5
-            'Kelola role pengguna',             // 6
-            'Kelola peminjaman',                // 7
-            'Kelola pengembalian',              // 8
-            'Mengajukan peminjaman buku',       // 9
-            'Memproses persetujuan peminjaman', // 10
-            'Mencatat pengembalian buku',       // 11
-            'Melihat status peminjaman sendiri',// 12
+            'Akses dashboard admin',             // 1
+            'Akses dashboard petugas',           // 2
+            'Lihat daftar buku',                 // 3
+            'Kelola data buku',                  // 4
+            'Kelola data pengguna',              // 5
+            'Kelola role pengguna',              // 6
+            'Kelola peminjaman',                 // 7
+            'Kelola pengembalian',               // 8
+            'Mengajukan peminjaman buku',        // 9
+            'Memproses persetujuan peminjaman',  // 10
+            'Mencatat pengembalian buku',        // 11
+            'Melihat status peminjaman sendiri', // 12
             'Melihat riwayat peminjaman sendiri',// 13
-            'Lihat laporan perpustakaan',       // 14
-            'Lihat profil sendiri',             // 15
-            'Ubah profil sendiri',              // 16
+            'Lihat laporan perpustakaan',        // 14
+            'Lihat profil sendiri',              // 15
+            'Ubah profil sendiri',               // 16
         ];
 
         foreach ($permissions as $permission) {
@@ -89,14 +90,32 @@ class RolePermissionSeeder extends Seeder
             'Ubah profil sendiri',
         ]);
 
-        // 6. Pasangkan Role ke User Penguji
-        $adminUser = User::where('email', 'admin@test.com')->first();
-        if ($adminUser) $adminUser->assignRole($roleAdmin);
+        // 6. Buat & Pasangkan Role ke User Penguji (Password baru, bukan 'password')
+        $adminUser = User::firstOrCreate(
+            ['email' => 'admin@test.com'],
+            [
+                'name' => 'Admin Perpustakaan',
+                'password' => Hash::make('AdminBaru#2026!'),
+            ]
+        );
+        $adminUser->assignRole($roleAdmin);
 
-        $petugasUser = User::where('email', 'petugas@test.com')->first();
-        if ($petugasUser) $petugasUser->assignRole($rolePetugas);
+        $petugasUser = User::firstOrCreate(
+            ['email' => 'petugas@test.com'],
+            [
+                'name' => 'Petugas Perpustakaan',
+                'password' => Hash::make('PetugasBaru#2026!'),
+            ]
+        );
+        $petugasUser->assignRole($rolePetugas);
 
-        $siswaUser = User::where('email', 'siswa@test.com')->first();
-        if ($siswaUser) $siswaUser->assignRole($roleSiswa);
+        $siswaUser = User::firstOrCreate(
+            ['email' => 'siswa@test.com'],
+            [
+                'name' => 'Siswa Perpustakaan',
+                'password' => Hash::make('SiswaBaru#2026!'),
+            ]
+        );
+        $siswaUser->assignRole($roleSiswa);
     }
 }
