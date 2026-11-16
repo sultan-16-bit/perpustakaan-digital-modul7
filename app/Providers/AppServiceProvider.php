@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\URL;
 use App\Models\User;
 use App\Models\Peminjaman;
 use App\Policies\PeminjamanPolicy;
@@ -23,6 +24,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        if ($this->app->environment('production')) {
+            URL::forceScheme('https');
+        }
+
         // Mendefinisikan Gate kelola-buku (Soal 3)
         Gate::define('kelola-buku', function (User $user) {
             return method_exists($user, 'hasRole') && ($user->hasRole('admin') || $user->hasRole('petugas'));
