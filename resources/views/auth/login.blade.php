@@ -1,4 +1,11 @@
 <x-guest-layout>
+    <!-- Judul Aplikasi & NIM (Soal 5) -->
+    <div class="mb-4 text-center">
+        <h2 class="text-lg font-bold text-gray-800">
+            Sistem Perpustakaan Digital - 250441100001
+        </h2>
+    </div>
+
     <!-- Session Status -->
     <x-auth-session-status class="mb-4" :status="session('status')" />
 
